@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+tables/
+build/
+*.so
+*.o
+tools/
+fulltab/data/
+attic/
