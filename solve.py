@@ -116,13 +116,13 @@ def lift(cp, co, rp, ro, gc, go):
     return st
 
 
-def solve_state(st, frames=3):
+def solve_state(st, frames=3, first_stage="table", endgame_width=1):
     """(HTM, run tokens) solving a full state with the ladder; the solution is checked to leave the puzzle visibly
     solved."""
     import ladder
     from scramble import normalise_runs, runs_to_quarters, htm
     print("loading the solver's tables (about 10 s; they must have been built, see LADDER.md)...", file=sys.stderr)
-    cost, plan = ladder.Ladder().solve(st, frames=frames)
+    cost, plan = ladder.Ladder(first_stage=first_stage, endgame_width=endgame_width).solve(st, frames=frames)
     sol = normalise_runs(M.parse(" ".join(w for name, ws in plan for w in ws)))
     got = M.apply_seq(st, runs_to_quarters(sol))
     assert got.visible() == M.State().visible(), "the solution does not solve the state"
@@ -134,6 +134,10 @@ def main(argv=None):
     ap.add_argument("--solve", metavar="FILE", help="solve a state file (- for stdin)")
     ap.add_argument("--solve-seq", metavar="SEQ", help="solve the state reached by a sequence")
     ap.add_argument("--frames", type=int, default=3, help="solve in 1-3 frames of the fixed corner, keep the cheapest (default 3)")
+    ap.add_argument("--first-stage", choices=("table", "direct"), default="table",
+                    help="use the existing table or experimental visible-state IDA* for rungs 1+2")
+    ap.add_argument("--endgame-width", type=int, default=1,
+                    help="try this many rung-6 landings through the finish (more search for shorter solutions)")
     ap.add_argument("--show", metavar="SEQ", help="print the state reached by a move sequence")
     ap.add_argument("--check", metavar="FILE", help="check a state file (- for stdin)")
     ap.add_argument("--check-seq", metavar="SEQ", help="check the state reached by a sequence")
@@ -151,7 +155,8 @@ def main(argv=None):
                 return 2
         if args.net:
             print(M.net(st))
-        cost, sol = solve_state(st, frames=args.frames)
+        cost, sol = solve_state(st, frames=args.frames, first_stage=args.first_stage,
+                               endgame_width=args.endgame_width)
         print(f"{cost} moves (HTM): {' '.join(sol)}")
         return 0
     if args.show or args.check_seq:

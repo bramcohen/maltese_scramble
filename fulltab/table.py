@@ -66,6 +66,7 @@ class ChainedTable:
         base = self.W.element(int(self.bwp[row]), int(self.bwq[row]))
         return base + " ".join(out[::-1]).split()
 
+
 class SlicedTable:
     """A table built from the ball with generated levels: two levels (fulltab/slice2.py + merge2.py, ball h-2; rung 7's
     large table, h = 11, 21 HTM; witnesses refer to the ball and to the level-(h-1) parents in data/t{h}_{r}/) or one
@@ -152,7 +153,7 @@ class FullRung:
 
 class RelabelRung(FullRung):
     """A rung solved up to relabelling: the input is renamed every way the invisible subgroup allows (reps_file holds
-    the inverses of a left transversal of S ∩ target in S ∩ starting group, as states; fulltab/treps*.py) and every
+    a right transversal of S ∩ target in S ∩ starting group, as states; fulltab/treps*.py) and every
     copy is probed at once; the candidates carry the renamed landing state, which the beam continues from.
     keep_in: a spec whose identity class a copy must lie in to hit the table at all (rung 4's table is built from Y,
     its inputs may lie in either coset of Y2).  alternatives: the inputs of one call are alternatives (orientations)
@@ -160,7 +161,8 @@ class RelabelRung(FullRung):
     the same probe, cheapest moves first; deeper: forward lists tried as a last resort."""
     def __init__(self, table, fwd, reps_file, max_candidates=200, keep_in=None, alternatives=False, prefix_retry=False, deeper=()):
         super().__init__(table, fwd, max_candidates)
-        self.reps = [CS.unpack_state(r) for r in np.load(reps_file)]
+        rows = CS.right_transversal(np.load(reps_file), self.spT)
+        self.reps = [CS.unpack_state(r) for r in rows]
         self.keep_in = keep_in; self.kin = keep_in.keys(CS.pack_states([M.State()]))[0] if keep_in is not None else None
         self.alternatives = alternatives; self.prefix_retry = prefix_retry; self.deeper = list(deeper)
     def _copies(self, states):
@@ -195,14 +197,21 @@ class RelabelRung(FullRung):
             todo = still
         return res
 
-def full_rungs(rung7=None):
+def full_rungs(rung7=None, first_stage="table"):
     """The five table rungs with the tables and depths of the final configuration.  rung7: "small" = the 20-HTM table
     (the default build, 1.9 h, 9 GB) with an 11-HTM forward; "large" = the 21-HTM table (13 h, 31 GB) with a 10-HTM
     forward, 1.3 HTM and 7 s per solve better; None = large if it is on disk, else small."""
+    if first_stage not in ("table", "direct"):
+        raise ValueError('first_stage must be "table" or "direct"')
     reps = lambda name: os.path.join(D, f"T_reps_{name}.npy")
     if rung7 is None: rung7 = "large" if os.path.exists(os.path.join(D, "mm", "full_rung7_t11m_tab.npy")) else "small"
     r7 = (SlicedTable("7", "full_rung7_t11m", 11, "F16"), Forward("7", 10)) if rung7 == "large" else (SlicedTable("7", "full_rung7_s10m", 10, "F16", levels=1), Forward("7", 11))
-    return {"12": RelabelRung(BallTable(9), BallForward(4), reps("12"), alternatives=True, prefix_retry=True, deeper=[BallForward(5), BallForward(6)]),
+    if first_stage == "direct":
+        from firststage import DirectFirstStage
+        first = DirectFirstStage()
+    else:
+        first = RelabelRung(BallTable(9), BallForward(4), reps("12"), alternatives=True, prefix_retry=True, deeper=[BallForward(5), BallForward(6)])
+    return {"12": first,
             "3": FullRung(ChainedTable("3", 20, "Y2", "y2"), Forward("3", 11)),
             "4": RelabelRung(ChainedTable("4", 28, "H1p"), Forward("4", 4), reps("4_y2"), keep_in=CS.Spec(canon="Y")),
             "5": FullRung(ChainedTable("5", 28, "H1"), Forward("5", 9)),

@@ -17,7 +17,10 @@ K7 = K6.subgroup_search(grp("A1").contains); log(f"|S ∩ A1| = {K7.order()}")
 K8 = K7.subgroup_search(grp("F16").contains); log(f"|S ∩ F16| = {K8.order()}")
 E = PermutationGroup([Permutation(list(range(GF.NPTS)))])
 for r, (K, H) in {"7": (K7, K8), "8": (K8, E)}.items():
-    reps = [g**-1 for g in K.coset_transversal(H)]; sts = [state_of(p) for p in reps]
+    reps = K.coset_transversal(H); sts = [state_of(p) for p in reps]
     assert all(GF.perm_of(s.as_element()) == p for s, p in zip(sts, reps))
-    np.save(f"fulltab/data/T_reps_{r}.npy", CS.pack_states(sts))
+    rows = CS.pack_states(sts)
+    spec = CS.Spec(canon="F16" if r == "7" else {"levels": []})
+    assert len(np.unique(spec.keys(rows))) == len(rows), "right-coset transversal coverage"
+    np.save(f"fulltab/data/T_reps_{r}.npy", rows)
     log(f"rung {r}: relabellings {len(reps)} ({np.log2(len(reps)):.1f} bits); legal {sum(1 for s in sts if not M.check(s))}; saved")

@@ -1,4 +1,4 @@
-"""Rung 4's renaming set when rung 3 targets Y2: left transversal of S ∩ H1' in S ∩ Y2 (9,216 expected), inverted, as
+"""Rung 4's renaming set when rung 3 targets Y2: right transversal of S ∩ H1' in S ∩ Y2 (9,216 expected), as
 packed states -> fulltab/data/T_reps_4_y2.npy."""
 import sys, time, pickle, numpy as np, model as M, coset as CS
 sys.path.insert(0, "."); import groupfacts as GF
@@ -14,6 +14,8 @@ def state_of(perm):
         for i in range(len(src)):
             v = a[base + i * k] - base; src[v // k] = i; d[v // k] = v % k
     return st
-reps = [g**-1 for g in K.coset_transversal(KH)]; sts = [state_of(p) for p in reps]
+reps = K.coset_transversal(KH); sts = [state_of(p) for p in reps]
 assert all(GF.perm_of(s.as_element()) == p for s, p in zip(sts[:30], reps[:30]))
-np.save("fulltab/data/T_reps_4_y2.npy", CS.pack_states(sts)); log(f"saved {len(sts):,} renamings (legal {sum(1 for s in sts if not M.check(s))})")
+rows = CS.pack_states(sts)
+assert len(np.unique(CS.Spec(canon="H1p").keys(rows))) == len(rows), "right-coset transversal coverage"
+np.save("fulltab/data/T_reps_4_y2.npy", rows); log(f"saved {len(sts):,} renamings (legal {sum(1 for s in sts if not M.check(s))})")

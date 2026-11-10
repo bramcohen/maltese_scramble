@@ -6,7 +6,9 @@ n = int(sys.argv[1]) if len(sys.argv) > 1 else 24; seed = int(sys.argv[2]) if le
 rss = lambda: resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e9
 PV = json.loads(os.environ.get("PARAMS_JSON", "{}")); RAW = os.environ.get("RAW") == "1"
 if RAW: PV = {**{r: {"keep": 1} for r in ("12", "3", "4", "5")}, **PV}
-t0 = time.time(); lad = L.Ladder(params=PV, retries=not RAW, rung7=os.environ.get("RUNG7"))
+t0 = time.time(); lad = L.Ladder(params=PV, retries=not RAW, rung7=os.environ.get("RUNG7"),
+                              first_stage=os.environ.get("FIRST_STAGE", "table"),
+                              endgame_width=int(os.environ.get("ENDGAME_WIDTH", "1")))
 if RAW: lad.m12.prefix_retry = False; lad.m12.deeper = []
 print(f"ladder ready ({time.time() - t0:.0f}s, peak RSS {rss():.1f} GB); overrides {PV}{' (raw run)' if RAW else ''}", flush=True)
 rng = np.random.default_rng(seed); states = [M.random_state(rng) for _ in range(n)]

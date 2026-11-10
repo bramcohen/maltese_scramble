@@ -46,6 +46,26 @@ person can see (the four gears of a face are identical and a centre's spin is in
   three quarter turns, `R'2` two counterclockwise. On this puzzle `R4` is **not** the identity: the ring has only
   turned 180°, so `R'` is not `R3`.
 
+## Search options
+
+`--endgame-width 4` tries three additional rung-6 landings through rungs 7 and 8, keeping the successful original
+continuation as a candidate. This trades more search time for shorter complete solutions. Finishes are now compared
+after merging with the preceding moves, including all invisible finish alternatives. From Python:
+`ladder.Ladder(endgame_width=4)`. The default width remains 1.
+
+Existing first-stage relabelling files are checked on load. The old generator inverted SymPy's right transversal;
+on the existing build, its 1,296 representatives covered only 500 distinct target cosets. The loader repairs that
+direction in memory, and the generators now write and verify the correct representatives. Large tables do not need
+rebuilding.
+
+`--first-stage direct` is an experimental IDA* search for rungs 1+2 using visible piece coordinates and approximately
+97 MB of pattern tables, built in seconds. It uses the same physical goal, returning a legal relabelled state for
+rung 3. It has a per-input search budget; exhaustion can produce fewer candidates. It is primarily a time/storage
+improvement, not a way to beat an optimal MITM entry. `python firststage.py --count 100` benchmarks it alone.
+
+For full benchmarks, `fulltab/beam_full.py` accepts `ENDGAME_WIDTH` and `FIRST_STAGE` in the
+environment. The original benchmark numbers above describe the original implementation, not these options.
+
 ## Checking a puzzle ("is mine assembled wrong?")
 
 ```bash

@@ -100,6 +100,23 @@ def pack_elems(elems):
     return np.ascontiguousarray(np.stack([pack_elem(e) for e in elems]))
 
 
+def right_transversal(rows, target):
+    """Validate representatives for target.r; repair old inverse-transversal files in memory.
+
+    Relabelling acts on the left of the input, so one representative of each
+    (S intersect target).r is required. Inverting a right transversal generally
+    makes a left transversal, which need not cover these cosets. Existing rung-12
+    files used that inverse convention; no large search tables need rebuilding.
+    """
+    rows = np.ascontiguousarray(rows, dtype=np.int8)
+    if len(np.unique(target.keys(rows))) == len(rows):
+        return rows
+    inverse = pack_states([unpack_state(row).as_element().inverse().state() for row in rows])
+    if len(np.unique(target.keys(inverse))) != len(rows):
+        raise ValueError('relabelling representatives do not cover distinct target right cosets')
+    return inverse
+
+
 class Spec:
     """Coset label.  pos: {kind: (slot_mask, piece_class)}; sib: {kind: (slot_mask, sibling_of_piece)};
     fun: {kind: (piece_type, rows)} with rows of shape (nf, nslot*ntype); pot: {kind: (pot_slot, pot_piece)}

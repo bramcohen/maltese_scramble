@@ -43,7 +43,12 @@ class Ladder:
         "7": dict(window=6, keep=50),
     }
 
-    def __init__(self, threads=16, verbose=False, params=None, retries=True, rung7=None):
+    def __init__(self, threads=16, verbose=False, params=None, retries=True, rung7=None, first_stage="table", endgame_width=1):
+        if first_stage not in ("table", "direct"):
+            raise ValueError('first_stage must be "table" or "direct"')
+        if endgame_width < 1:
+            raise ValueError('endgame_width must be positive')
+        self.endgame_width = endgame_width
         self.verbose = verbose; self.threads = threads
         self.retries = retries                     # False: a rung that finds nothing fails the solve (the raw benchmark)
         self.params = {r: dict(v) for r, v in self.PARAMS.items()}
@@ -63,7 +68,7 @@ class Ladder:
         self.f8 = _finish_table()
         # the table rungs (fulltab/table.py): 1+2, 3, 4, 5, 7
         import sys; sys.path.insert(0, os.path.join(HERE, "fulltab")); import table as FT
-        full = FT.full_rungs(rung7)                 # rung7: "small" (20-HTM table, the default build), "large" (21 HTM), None = large if present
+        full = FT.full_rungs(rung7, first_stage=first_stage)
         self.m12 = full["12"]
         self.rungs = {"3": (full["3"], self.spec2b), "4": (full["4"], self.spec3), "5": (full["5"], self.spec4),
                       "6": (self.mI1, self.specI1), "7": (full["7"], self.specI2)}
@@ -156,11 +161,29 @@ class Ladder:
 
     def _finish(self, st):
         """(cost, path from solved) of the cheapest finish over st and its invisible renamings."""
-        best = self.f8[st.key()]; e = st.as_element()
+        return min(self._finishes(st), key=lambda c: c[0])
+
+    def _finishes(self, st):
+        """All stored invisible finishes; the shortest alone need not merge best with a prefix."""
+        seen = {st.key()}; yield self.f8[st.key()]; e = st.as_element()
         for k in self.reps["8"]:
-            c = self.f8.get(k.apply(e).key())
-            if c and c[0] < best[0]:
-                best = c
+            key = k.apply(e).key()
+            if key in seen:
+                continue
+            seen.add(key); c = self.f8.get(key)
+            if c is not None:
+                yield c
+
+    def _best_finish(self, st, flat, fi=0, st_std=None):
+        """Choose by the merged whole path, including each invisible finish and inner frame."""
+        best = None
+        for _, path in self._finishes(st):
+            fin = [CS.inverse_word(w) for w in reversed(path)]
+            if fi:
+                fin = self.rename_inner(fin, fi, st_std)
+            total = htm(" ".join(flat + fin))
+            if best is None or total < best[0]:
+                best = (total, fin)
         return best
 
     def _beam(self, state, frames, slack):
@@ -211,14 +234,15 @@ class Ladder:
                 if not beam:
                     return None
             if r == "7":
+                # Preserve the successful incumbent, then spend extra search on other
+                # rung-6 landings. A cheap prefix can have an expensive continuation.
+                extra = list(itertools.islice(spare, max(0, self.endgame_width - len(beam))))
+                if extra:
+                    children += self._extend(r, extra, p["window"])
                 best = None; t8 = time.time()
                 for h, k, plan, st, flat, *inner in children:
                     fi, st_std = inner if inner else (0, st)
-                    cost8, path = self._finish(st)
-                    fin = [CS.inverse_word(w) for w in reversed(path)]
-                    if fi:
-                        fin = self.rename_inner(fin, fi, st_std)
-                    tot = htm(" ".join(flat + fin))
+                    tot, fin = self._best_finish(st, flat, fi, st_std)
                     if best is None or tot < best[0]:
                         best = (tot, k, plan + [("8", fin)])
                 tot, k, plan = best; self.misslog.append(("8", len(children), 0, 0, 0, round(time.time() - t8, 2)))
