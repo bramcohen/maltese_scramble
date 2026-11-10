@@ -98,55 +98,55 @@ class BallTable:
 class FullRung:
     """A rung for the ladder's beam: solve_many(states, window) returns, per input, the candidates (merged HTM, words,
     [], landing state) within `window` of its best, ranked by merged length, one per landing state, every sequence
-    verified by label.  Words are single runs, so the beam's merging works across them."""
+    verified by label. Optional prefixes are in the input state's frame; ranking includes their cancellation,
+    while the returned cost and words describe this rung alone. Words are single runs."""
     def __init__(self, table, fwd, max_candidates=200):
         self.table = table; self.fwd = fwd; self.spT = table.spT; self.kT = self.spT.keys(CS.pack_states([M.State()]))[0]
         self.max_candidates = max_candidates; self.candidates = []; self.hits = 0; self.bad_witnesses = 0
-    def _cands(self, hits, src, fwd, window, cap):
-        """Candidates from hit rows (input index, element, table index, forward cost, table cost); src(xi) is the state
-        the sequence is applied to."""
+    def _cands(self, hits, src, fwd, window, cap, prefix=()):
+        """Verify hits already scored in C, then cap distinct landings in merged-cost order.
+
+        Hit rows contain input, forward row, table row, raw costs, and merged
+        prefix cost. src(xi) is the relabelled state the sequence acts on.
+        """
         if len(hits) == 0: return []
-        tot = hits[:, 3] + hits[:, 4]; best = int(tot.min()); seen = set(); landed = set(); out = []
-        for xi, ei, ti, ec, c in hits[np.argsort(tot, kind="stable")]:
-            if ec + c > best + window or len(out) >= cap: break
+        best = int(hits[:,5].min()); seen = set(); landed = set(); out = []
+        # Stable tie-breaking independent of the C workers' arrival order.
+        order=np.lexsort((hits[:,2],hits[:,1],hits[:,0],hits[:,3]+hits[:,4],hits[:,5]))
+        for xi, ei, ti, ec, c, score in hits[order]:
+            if score > best + window or len(out) >= cap: break
             try: seq = fwd.moves(int(ei)) + [inv_run(w) for w in self.table.moves(int(ti))[::-1]]
             except (IndexError, ValueError): self.bad_witnesses += 1; continue
             key = (int(xi), " ".join(seq))
             if key in seen: continue
+            if L.htm(' '.join(list(prefix)+seq)) != score:
+                raise RuntimeError('merged-cost witness score mismatch')
             seen.add(key); s2 = M.apply_seq(src(int(xi)), key[1])
             if self.spT.keys(CS.pack_states([s2]))[0] != self.kT: continue
             k2 = s2.key()                                   # one candidate per landing state (many sequences reach the same one)
             if k2 in landed: continue
             landed.add(k2); out.append((L.htm(" ".join(seq)), seq, [], s2))
-        out.sort(key=lambda c: c[0]); return out[:cap]
-    def _probe_groups(self, xs, groups, fwd, window, hcap=1 << 20):
-        """One pass over the forward list for many packed inputs.  groups[g] = indices into xs that belong to input g
-        (several copies of one state).  Returns per group the hit rows (input column = index into xs) with cost
-        <= that group's best + window; None for a group with no hit at the full bound.  Many copies are probed from
-        a tight bound upwards so the hit cap never drops the cheapest; the kernel keeps only hits within the window
-        of each input's running best."""
-        full = fwd.E + self.table.tmax; out = [None] * len(groups); todo = list(range(len(groups)))
-        for bound in ((full - 8, full - 4, full) if len(xs) > 64 else (full,)):
-            if not todo: break
-            idx = np.concatenate([groups[g] for g in todo]); back = np.empty(len(xs), np.int64); back[idx] = np.arange(len(idx))
-            gid = np.concatenate([np.full(len(groups[g]), g) for g in todo])
-            h = F.probe50_multi(fwd.maps, fwd.cost, fwd.E, xs[idx], self.table.tab, self.table.bidx, self.table.B, self.spT, bound=bound, hcap=hcap, mir=self.table.mir, window=window)
-            if len(h) >= hcap and len(todo) > 1:               # cap reached: redo this bound one group at a time
-                for g in list(todo):
-                    r = self._probe_groups(xs, [groups[g]], fwd, window, hcap)[0]
-                    if r is not None: out[g] = r
-                return out
-            h[:, 0] = idx[h[:, 0]]; hg = gid[back[h[:, 0]]]; tot = h[:, 3] + h[:, 4]; still = []
-            for g in todo:
-                m = hg == g
-                if m.any() and (int(tot[m].min()) + window <= bound or bound == full): out[g] = h[m]
-                elif bound < full: still.append(g)
-            todo = still
-        return out
-    def solve_many(self, states, window=0, max_candidates=None):
+        return out[:cap]
+    def _probe_groups(self, xs, groups, fwd, window, hcap=1 << 20, prefixes=None):
+        """Probe all stored words once, without a raw-length cutoff before merging.
+
+        groups[g] identifies the copies of input g. The C kernel applies the
+        window to the running merged best across those copies; _cands removes
+        hits outside the final window. An overflowing buffer is retried.
+        """
+        prefixes=prefixes if prefixes is not None else [[] for _ in groups]
+        if not groups: return []
+        idx=np.concatenate(groups);gid=np.concatenate([np.full(len(g),i,np.int32) for i,g in enumerate(groups)])
+        if not len(idx): return [None]*len(groups)
+        h=F.probe_merged(fwd,self.table,xs[idx],gid,prefixes,window,hcap)
+        hg=gid[h[:,0]];h[:,0]=idx[h[:,0]]
+        return [h[hg==g] if np.any(hg==g) else None for g in range(len(groups))]
+    def solve_many(self, states, window=0, max_candidates=None, prefixes=None):
         cap = max_candidates or self.max_candidates; xs = CS.pack_states(states); groups = [np.array([i]) for i in range(len(states))]
-        hits = self._probe_groups(xs, groups, self.fwd, window, hcap=len(states) << 20); self.hits = sum(len(h) for h in hits if h is not None)
-        return [self._cands(h, lambda xi, st=st: st, self.fwd, window, cap) if h is not None else [] for h, st in zip(hits, states)]
+        prefixes=prefixes if prefixes is not None else [[] for _ in states]
+        if len(prefixes)!=len(states): raise ValueError('one prefix is required per input state')
+        hits = self._probe_groups(xs, groups, self.fwd, window, hcap=len(states) << 20,prefixes=prefixes); self.hits = sum(len(h) for h in hits if h is not None)
+        return [self._cands(h, lambda xi, st=st: st, self.fwd, window, cap,prefix) if h is not None else [] for h, st,prefix in zip(hits, states,prefixes)]
     def solve(self, state, window=0, max_candidates=None):
         self.candidates = self.solve_many([state], window, max_candidates)[0]
         return self.candidates[0] if self.candidates else None
@@ -171,29 +171,32 @@ class RelabelRung(FullRung):
         if self.keep_in is not None:
             ok = self.keep_in.keys(xs) == self.kin; groups = [g[ok[g]] for g in groups]
         return ys, xs, groups
-    def solve_many(self, states, window=0, max_candidates=None):
+    def solve_many(self, states, window=0, max_candidates=None, prefixes=None):
         cap = max_candidates or self.max_candidates; res = [[] for _ in states]; self.hits = 0
+        prefixes=prefixes if prefixes is not None else [[] for _ in states]
+        if len(prefixes)!=len(states): raise ValueError('one prefix is required per input state')
         ys, xs, groups = self._copies(states)
-        for g, h in enumerate(self._probe_groups(xs, groups, self.fwd, window)):
-            if h is not None: self.hits += len(h); res[g] = self._cands(h, lambda xi: ys[xi], self.fwd, window, cap)
+        for g, h in enumerate(self._probe_groups(xs, groups, self.fwd, window,prefixes=prefixes)):
+            if h is not None: self.hits += len(h); res[g] = self._cands(h, lambda xi: ys[xi], self.fwd, window, cap,prefixes[g])
         if any(res) and self.alternatives: return res
         todo = [g for g in range(len(states)) if not res[g]]
         if todo and self.prefix_retry:
             for w in sorted(RUNS, key=L.word_htm):
                 yp, xp, gp = self._copies([M.apply_seq(st, w) for st in states]); found = False
-                for g, h in zip(todo, self._probe_groups(xp, [gp[g] for g in todo], self.fwd, window)):
+                retry_prefixes=[list(prefixes[g])+[w] for g in todo]
+                for g, h in zip(todo, self._probe_groups(xp, [gp[g] for g in todo], self.fwd, window,prefixes=retry_prefixes)):
                     if h is None: continue
-                    self.hits += len(h); c = self._cands(h, lambda xi: yp[xi], self.fwd, window, cap)
-                    res[g] = sorted(((L.htm(" ".join([w] + seq)), [w] + seq, rest, land) for _, seq, rest, land in c), key=lambda x: x[0]); found = found or bool(res[g])
+                    self.hits += len(h); c = self._cands(h, lambda xi: yp[xi], self.fwd, window, cap,list(prefixes[g])+[w])
+                    res[g] = [(L.htm(" ".join([w] + seq)), [w] + seq, rest, land) for _, seq, rest, land in c]; found = found or bool(res[g])
                 if found and self.alternatives: return res
                 todo = [g for g in todo if not res[g]]
                 if not todo: return res
         for fwd in self.deeper:
             if not todo or (self.alternatives and any(res)): break
             still = []
-            for g, h in zip(todo, self._probe_groups(xs, [groups[g] for g in todo], fwd, window)):
+            for g, h in zip(todo, self._probe_groups(xs, [groups[g] for g in todo], fwd, window,prefixes=[prefixes[g] for g in todo])):
                 if h is None: still.append(g); continue
-                self.hits += len(h); res[g] = self._cands(h, lambda xi: ys[xi], fwd, window, cap)
+                self.hits += len(h); res[g] = self._cands(h, lambda xi: ys[xi], fwd, window, cap,prefixes[g])
             todo = still
         return res
 

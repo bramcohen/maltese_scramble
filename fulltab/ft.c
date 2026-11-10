@@ -579,6 +579,8 @@ int64_t probe50_multi(const uint8_t *el, const int8_t *ec, int64_t n, int emax, 
     for (int t = 0; t < threads; t++) pthread_join(th[t], NULL);
     free(X); free(best); return P.nh < P.hcap ? P.nh : P.hcap;
 }
+#include "merged_cost.c"
+
 /* debug: per-level choice and map of the 50-point canonical form */
 
 /* =================== two generated levels (for the 21-HTM table): level h as (parent, run) lists ===================

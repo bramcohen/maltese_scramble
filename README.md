@@ -48,6 +48,17 @@ person can see (the four gears of a face are identical and a centre's spin is in
 
 ## Search options
 
+MITM candidate windows and caps use HTM after merging the forward path, backward path, and preceding solution.
+The C probe handles cascading cancellations before pruning; returned witnesses are checked against the puzzle
+model. This uses the existing tables and does not require rebuilding them.
+
+On 24 paired random states (seed 20261111), with the **small rung-7 table** and otherwise default settings,
+merged-cost selection reduced mean complete solution length from 135.75 to 134.33 HTM. Ten solutions shortened,
+nine tied, and five lengthened. Mean solve time was 33.8 s versus 37.7 s; the slowest paired trial was 47.2 s
+versus 57.0 s. A fresh-process repeat of the slowest trial took 51.6 s including compilation and table loading.
+These are sample measurements, not a worst-case runtime guarantee. Reproduce the current solver run with
+`RUNG7=small PYTHONPATH=. .venv/bin/python fulltab/beam_full.py 24 20261111`.
+
 `--endgame-width 4` tries three additional rung-6 landings through rungs 7 and 8, keeping the successful original
 continuation as a candidate. This trades more search time for shorter complete solutions. Finishes are now compared
 after merging with the preceding moves, including all invisible finish alternatives. From Python:

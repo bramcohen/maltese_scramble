@@ -1,7 +1,7 @@
 """ctypes wrapper for fulltab/ft.c (rebuilt when the source changes)."""
 import os, subprocess, ctypes as ct, numpy as np, coset as CS
 HERE = os.path.dirname(os.path.abspath(__file__)); SO = os.path.join(HERE, "ft.so"); SRC = os.path.join(HERE, "ft.c")
-if not os.path.exists(SO) or os.path.getmtime(SO) < os.path.getmtime(SRC):
+if not os.path.exists(SO) or os.path.getmtime(SO) < max(os.path.getmtime(p) for p in (SRC,os.path.join(HERE,'merged_cost.c'))):
     subprocess.check_call(["cc", "-O3", "-mcpu=apple-m1", "-shared", "-fPIC", "-o", SO + ".tmp", SRC, "-lpthread"]); os.replace(SO + ".tmp", SO)
 lib = ct.CDLL(SO)
 i8p = ct.POINTER(ct.c_int8); i64p = ct.POINTER(ct.c_int64); u64p = ct.POINTER(ct.c_uint64); dp = ct.POINTER(ct.c_double)
@@ -233,6 +233,83 @@ class Witness2(Witness):
         out = []
         while sid > 0: out.append(RUNS[int(self.run[sid])]); sid = int(self.par[sid])
         return out[::-1] + tail
+
+
+class _MoveSource(ct.Structure):
+    _fields_ = [('kind',ct.c_int),('levels',ct.c_int)] + [(n,VP) for n in
+                ('par','p1','run','r1','p','q','rows','der','pieces','offset')] + [(n,ct.c_int64) for n in
+                ('npar','n1','nitem','nbase','nder','npiece')]
+
+
+class MoveSource:
+    """C view of the existing ball, pair, sliced or chained witnesses."""
+    def __init__(self,obj):
+        import ladder as L
+        self.obj=obj; self.keep=[]; s=self.s=_MoveSource(); w=obj.W
+        def put(name,a):
+            a=np.ascontiguousarray(a); self.keep.append(a); setattr(s,name,a.ctypes.data)
+        put('par',w.par);put('run',w.run);s.npar=len(w.par)
+        s.levels=2 if isinstance(w,Witness2) else 1
+        if s.levels==2:
+            put('p1',w.P1);put('r1',w.R1);s.n1=len(w.P1)
+        if hasattr(obj,'DER'):
+            s.kind=3;put('rows',obj.rows);put('der',obj.DER);put('p',obj.bwp);put('q',obj.bwq)
+            s.nitem=len(obj.rows);s.nder=len(obj.DER);s.nbase=len(obj.bwp)
+            pieces=[[RUNS.index(r) for r in L.simplify(str(seq))] for seq in obj.pseq]
+            offsets=np.r_[0,np.cumsum([len(seq) for seq in pieces])].astype(np.int32)
+            put('offset',offsets);put('pieces',np.array([r for seq in pieces for r in seq],np.int8));s.npiece=len(pieces)
+        elif hasattr(obj,'wp'):
+            s.kind=2;put('p',obj.wp);put('q',obj.wq);s.nitem=s.nbase=len(obj.wp)
+        elif hasattr(obj,'wit'):
+            s.kind=1;put('p',obj.wit);s.nitem=len(obj.wit)
+        else:
+            s.kind=0;s.nitem=len(obj.maps)
+
+    def words(self,i):
+        out=np.empty(256,np.int8);n=lib.merged_decode(ct.byref(self.s),i,p(out,i8p))
+        if n<0: raise ValueError('invalid or oversized table witness')
+        return [RUNS[r] for r in out[:n]]
+
+
+lib.merged_decode.argtypes=[ct.POINTER(_MoveSource),ct.c_int64,i8p];lib.merged_decode.restype=ct.c_int
+lib.merged_score.argtypes=[i8p,ct.c_int,i8p,ct.c_int,i8p,ct.c_int];lib.merged_score.restype=ct.c_int
+lib.probe50_merged.argtypes=[u8p,i8p,ct.c_int64,i8p,ct.c_int64,u64p,u32p,ct.c_int,VP,VP,
+                           ct.POINTER(_MoveSource),ct.POINTER(_MoveSource),VP,ct.c_int,i8p,VP,u8p,ct.c_uint64,
+                           ct.c_int,ct.c_int,i64p,ct.c_int64]
+lib.probe50_merged.restype=ct.c_int64
+
+
+def probe_merged(fwd,table,xs,groups,prefixes,window,hcap,threads=18):
+    """Probe every stored forward element; rank hits by prefix + forward - back.
+
+    The window is shared by all relabelled copies of a logical input. Witness
+    decoding uses the existing parent arrays, so this needs no table rebuild.
+    """
+    import model as M
+    import ladder as L
+    if not 1<=threads<=64 or hcap<1 or window<0:
+        raise ValueError('expected 1..64 threads, positive capacity and nonnegative window')
+    if len(groups)!=len(xs) or any(g<0 or g>=len(prefixes) for g in groups):
+        raise ValueError('each input must identify an existing prefix group')
+    for obj in (fwd,table):
+        if not hasattr(obj,'_move_source'): obj._move_source=MoveSource(obj)
+    pcs=[[RUNS.index(r) for r in L.simplify(' '.join(words))] for words in prefixes]
+    if any(len(pc)>512 for pc in pcs): raise ValueError('prefix exceeds 512 runs')
+    off=np.r_[0,np.cumsum([len(pc) for pc in pcs])].astype(np.int32)
+    pre=np.array([r for pc in pcs for r in pc] or [0],np.int8)
+    gids=np.ascontiguousarray(groups,np.int32);xs=np.ascontiguousarray(xs,np.int8)
+    if not hasattr(table,'_merge_runmaps'):
+        table._merge_runmaps=maps50(CS.pack_states([M.apply_seq(M.State(),r) for r in RUNS]))
+        table._merge_goal=int(labels50(CS.pack_states([M.State()]),table.spT)[0]&~CM)
+    while True:
+        hits=np.empty((hcap,6),np.int64)
+        n=lib.probe50_merged(p(fwd.maps,u8p),p(fwd.cost,i8p),len(fwd.maps),p(xs,i8p),len(xs),p(table.tab,u64p),
+                            p(table.bidx,u32p),table.B,fs(table.spT),mirror() if table.mir else None,
+                            ct.byref(fwd._move_source.s),ct.byref(table._move_source.s),gids.ctypes.data,len(prefixes),
+                            p(pre,i8p),off.ctypes.data,p(table._merge_runmaps,u8p),table._merge_goal,
+                            window,threads,p(hits,i64p),hcap)
+        if n<=hcap: return hits[:n]
+        hcap=max(hcap*2,n)  # Overflow must not silently discard later, shorter hits.
 
 lib.fin_mod.argtypes = [u64p, ct.c_int64, ct.c_int, i64p]
 def slice_of(labels, ns):

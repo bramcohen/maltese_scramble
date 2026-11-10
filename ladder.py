@@ -102,7 +102,8 @@ class Ladder:
         if not beam: return []
         many = None
         if not p.get("lookup"):            # table rungs: all inputs in one pass over the forward list
-            many = m.solve_many([e[3] for e in beam], window=p["window"], max_candidates=cap or m.max_candidates)
+            prefixes=[self._prefix_in_frame(e[4],e[5],e[6]) if len(e)>5 and e[5] else e[4] for e in beam]
+            many = m.solve_many([e[3] for e in beam], window=p["window"], max_candidates=cap or m.max_candidates,prefixes=prefixes)
         for bi, (h0, k, plan, st, flat, *inner) in enumerate(beam):
             fi, st_std = inner if inner else (0, st); renamed_already = False
             if p.get("lookup"):
@@ -271,6 +272,19 @@ class Ladder:
         return list(itertools.islice(it, keep)), it
 
     # ------------------------------------------------------------------ inner frames (rungs 6-8)
+
+    def _prefix_in_frame(self, words, fi, end):
+        """Walk a prefix backwards to express it in the next rung's frame."""
+        rot=self.inner_rots[fi]; after=self._conj(rot,end); reverse=[]
+        for word in reversed(simplify(' '.join(words))):
+            before=M.apply_seq(end,CS.inverse_word(word)); rotated=self._conj(rot,before)
+            for run in RUNS:
+                if M.apply_seq(rotated,run)==after:
+                    if word_htm(run)!=word_htm(word): raise RuntimeError('frame changes run cost')
+                    reverse.append(run);break
+            else: raise RuntimeError('cannot express prefix in inner frame')
+            end,after=before,rotated
+        return reverse[::-1]
 
     def _init_inner_frames(self):
         """The cube rotations that map H1 = <U, R2, F2> onto itself (8: the turns about the U/D axis and the flips
